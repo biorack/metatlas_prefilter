@@ -1,0 +1,5 @@
+mz	rt_peak	label	rt_min	rt_max	mz_tolerance	polarity	inchi_key	identification_notes	adduct
+130.0873522	0.78	leucine (unlabeled)	0.48	1.08	20	negative	ROHFNLRQFUQHCH-UHFFFAOYSA-N	ionizes in Both polarity.	[M-H]-
+164.0717021	1.77	phenylalanine (unlabeled)	1.47	2.07	20	negative	COLNVLDHVKWLRT-QMMMGPOBSA-N	ionizes in Both polarity.	[M-H]-
+203.0826012	2.34	tryptophan (unlabeled)	2.04	2.64	20	negative	QIVBCDIJIAJPQS-SECBINFHSA-N	ionizes in Both polarity.	[M-H]-
+227.96656	4.77	ABMBA (Br-nat)	4.47	5.07	20	negative	LCMZECCEEOQWLQ-UHFFFAOYSA-N	ionizes in Both polarity. OPTIONAL	[M-H]-
