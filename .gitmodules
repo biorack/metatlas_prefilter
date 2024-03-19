@@ -1,0 +1,6 @@
+[submodule "metatlas-data"]
+	path = metatlas-data
+	url = https://github.com/biorack/metatlas-data
+[submodule "metatlas"]
+	path = metatlas
+	url = https://github.com/biorack/metatlas
