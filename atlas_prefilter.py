@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import glob
 import os
-from typing import List, Tuple
+from typing import TypeAlias
 from tqdm import tqdm
 
 import matchms as mms
@@ -10,6 +10,9 @@ from matchms.similarity import CosineGreedy
 
 from metatlas.metatlas.io import feature_tools as ft
 from feature_tools_addition import calculate_ms2_summary
+
+# Typing:
+MS2Spectrum: TypeAlias = np.ndarray[np.ndarray, np.ndarray]
 
 
 ## Set atlas pre-filter parameters. This will eventually be derived from the SLURM input and config file paramters
@@ -45,7 +48,7 @@ rt_regression = False
 model_degree = 1
 
 
-def order_ms2_spectrum(spectrum:np.array) -> np.array:
+def order_ms2_spectrum(spectrum:MS2Spectrum) -> MS2Spectrum:
     """Order spectrum by m/z from lowest to highest.
 
     Ordering spectrum by m/z prevents MatchMS errors during MS/MS scoring.
@@ -62,7 +65,7 @@ def extract_file_polarity(file_path:str) -> str:
     """
     return os.path.basename(file_path).split('_')[9]
 
-def subset_file_paths(all_files:list, polarity:str) -> Tuple[List, List]:
+def subset_file_paths(all_files:list, polarity:str) -> tuple[list[str], list[str]]:
     """Return lists of QC file paths and sample file paths filtered by polarity.
 
     Filter polarity is used in this case to retrieve both fast polarity switching (FPS) files and files matching the defined polarity
@@ -98,7 +101,7 @@ def get_rt_adjustment_ms1_data(rt_adjustment_atlas:pd.DataFrame, qc_files:list, 
         
     return pd.concat(ms1_data)
 
-def align_rt_adjustment_peaks(ms1_data:pd.DataFrame, rt_adjustment_atlas:pd.DataFrame) -> Tuple[List, List]:
+def align_rt_adjustment_peaks(ms1_data:pd.DataFrame, rt_adjustment_atlas:pd.DataFrame) -> tuple[list[float], list[float]]:
     """align median experimental retention time peaks with rt adjustment atlas peaks."""
     
     median_experimental_rt_peaks = ms1_data[ms1_data['peak_height'] >= 1e4].groupby('label')['rt_peak'].median()
@@ -130,7 +133,7 @@ def adjust_template_atlas_rt_peaks(template_atlas:pd.DataFrame, original_rt_peak
 
 # Note: refactor this function after adding the calculate ms2 summary function to feature tools
 def get_experimental_ms_data(aligned_template_atlas:pd.DataFrame, sample_files:list, 
-                             ppm_tolerance:int, extra_time:float, polarity:str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                             ppm_tolerance:int, extra_time:float, polarity:str) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     experiment_input = ft.setup_file_slicing_parameters(aligned_template_atlas, sample_files, base_dir=os.getcwd(), ppm_tolerance=ppm_tolerance, extra_time=extra_time, polarity=polarity)
 
