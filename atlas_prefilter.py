@@ -6,7 +6,7 @@ from typing import TypeAlias
 from tqdm import tqdm
 
 import matchms as mms
-from matchms.similarity import CosineGreedy
+from matchms.similarity import CosineHungarian
 
 from metatlas.metatlas.io import feature_tools as ft
 from feature_tools_addition import calculate_ms2_summary
@@ -48,7 +48,7 @@ rt_regression = False
 model_degree = 1
 
 
-def order_ms2_spectrum(spectrum:MS2Spectrum) -> MS2Spectrum:
+def order_ms2_spectrum(spectrum: MS2Spectrum) -> MS2Spectrum:
     """Order spectrum by m/z from lowest to highest.
 
     Ordering spectrum by m/z prevents MatchMS errors during MS/MS scoring.
@@ -58,14 +58,16 @@ def order_ms2_spectrum(spectrum:MS2Spectrum) -> MS2Spectrum:
     
     return ordered_spec
 
-def extract_file_polarity(file_path:str) -> str:
+
+def extract_file_polarity(file_path: str) -> str:
     """Extract file polarity from file path.
     
     Per file naming conventions, field 9 of each (underscore delimited) filename contains the polarity information for that particular file.
     """
     return os.path.basename(file_path).split('_')[9]
 
-def subset_file_paths(all_files:list, polarity:str) -> tuple[list[str], list[str]]:
+
+def subset_file_paths(all_files: list, polarity: str) -> tuple[list[str, ...], list[str, ...]]:
     """Return lists of QC file paths and sample file paths filtered by polarity.
 
     Filter polarity is used in this case to retrieve both fast polarity switching (FPS) files and files matching the defined polarity
@@ -85,8 +87,9 @@ def subset_file_paths(all_files:list, polarity:str) -> tuple[list[str], list[str
 
     return (sample_files, qc_files)
 
-def get_rt_adjustment_ms1_data(rt_adjustment_atlas:pd.DataFrame, qc_files:list, ppm_tolerance:int,
-                               extra_time:float, polarity:str) -> pd.DataFrame:
+
+def get_rt_adjustment_ms1_data(rt_adjustment_atlas: pd.DataFrame, qc_files: list[str, ...], ppm_tolerance: int,
+                               extra_time: float, polarity: str) -> pd.DataFrame:
     """Collect all MS1 feature data for each entry in the retention time adjustment atlas."""
 
     experiment_input = ft.setup_file_slicing_parameters(rt_adjustment_atlas, qc_files, base_dir=os.getcwd(), ppm_tolerance=ppm_tolerance, extra_time=extra_time, polarity=polarity)
@@ -101,7 +104,8 @@ def get_rt_adjustment_ms1_data(rt_adjustment_atlas:pd.DataFrame, qc_files:list, 
         
     return pd.concat(ms1_data)
 
-def align_rt_adjustment_peaks(ms1_data:pd.DataFrame, rt_adjustment_atlas:pd.DataFrame) -> tuple[list[float], list[float]]:
+
+def align_rt_adjustment_peaks(ms1_data: pd.DataFrame, rt_adjustment_atlas: pd.DataFrame) -> tuple[list[float, ...], list[float, ...]]:
     """align median experimental retention time peaks with rt adjustment atlas peaks."""
     
     median_experimental_rt_peaks = ms1_data[ms1_data['peak_height'] >= 1e4].groupby('label')['rt_peak'].median()
@@ -112,8 +116,9 @@ def align_rt_adjustment_peaks(ms1_data:pd.DataFrame, rt_adjustment_atlas:pd.Data
 
     return (original_rt_peaks, experimental_rt_peaks)
 
-def adjust_template_atlas_rt_peaks(template_atlas:pd.DataFrame, original_rt_peaks:list, experimental_rt_peaks:list, 
-                     rt_regression:bool, model_degree:int) -> pd.DataFrame:
+
+def adjust_template_atlas_rt_peaks(template_atlas: pd.DataFrame, original_rt_peaks: list[float, ...], experimental_rt_peaks:list[float, ...], 
+                     rt_regression: bool, model_degree: int) -> pd.DataFrame:
     """Build and use model to adjust template atlas retention time peaks to match experimental retention time space."""
 
     aligned_template_atlas = template_atlas.copy()
@@ -131,9 +136,11 @@ def adjust_template_atlas_rt_peaks(template_atlas:pd.DataFrame, original_rt_peak
 
     return aligned_template_atlas
 
+
 # Note: refactor this function after adding the calculate ms2 summary function to feature tools
-def get_experimental_ms_data(aligned_template_atlas:pd.DataFrame, sample_files:list, 
-                             ppm_tolerance:int, extra_time:float, polarity:str) -> tuple[pd.DataFrame, pd.DataFrame]:
+def get_experimental_ms_data(aligned_template_atlas: pd.DataFrame, sample_files: list[str, ...], 
+                             ppm_tolerance: int, extra_time: float, polarity: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Collect MS1 and MS2 data from experimental sample data using aligned atlas."""
 
     experiment_input = ft.setup_file_slicing_parameters(aligned_template_atlas, sample_files, base_dir=os.getcwd(), ppm_tolerance=ppm_tolerance, extra_time=extra_time, polarity=polarity)
 
@@ -158,3 +165,58 @@ def get_experimental_ms_data(aligned_template_atlas:pd.DataFrame, sample_files:l
     ms2_data['spectrum'] = ms2_data['spectrum'].apply(order_ms2_spectrum)
 
     return (ms1_data, ms2_data)
+
+
+#note, replace with new load function from metatlas once msms hits refactor is in place
+def load_msms_refs_file(msms_refs_path: str, polarity: str) -> pd.DataFrame:
+    """Load and filter MSMS refs file.
+    
+    In addition to loading and filtering MSMS refs, spectral data is converted to Numpy array format.
+    """
+
+    ref_dtypes = {'database': str, 'id': str, 'name': str,
+                          'spectrum': object, 'decimal': int, 'precursor_mz': float,
+                          'polarity': str, 'adduct': str, 'fragmentation_method': str,
+                          'collision_energy': str, 'instrument': str, 'instrument_type': str,
+                          'formula': str, 'exact_mass': float,
+                          'inchi_key': str, 'inchi': str, 'smiles': str}
+    
+    msms_refs_df = pd.read_csv(msms_refs_path, sep='\t', dtype=ref_dtypes)
+    msms_refs_filtered = msms_refs_df[(msms_refs_df['database'] == 'metatlas') & (msms_refs_df['polarity'] == polarity)].copy()
+    
+    msms_refs_filtered['spectrum'] = msms_refs_filtered['spectrum'].apply(lambda x: np.asarray(eval(x)))
+    msms_refs_filtered['spectrum'] = msms_refs_filtered.apply(order_ms2_spectrum, axis=1)
+
+    return msms_refs_filtered
+
+
+def calculate_ms2_scores(ms2_data_enriched: pd.DataFrame, frag_tolerance: float) -> list[float, ...]:
+    """Calculate cosine similarity scores for each feature in the sample MS2 data.
+    
+    To maintain parity with the MSMS hits collection, scoring is performed using the Hungarian alignment algorithm.
+    """
+
+    cosine_hungarian = CosineHungarian(tolerance=frag_tolerance)
+    scores = ms2_data_enriched.apply(lambda x: cosine_hungarian.pair(x.mms_spectrum_x, x.mms_spectrum_y), axis=1)
+    
+    return scores
+
+
+def enrich_ms2_data(msms_refs_path: str, polarity: str, 
+                    aligned_template_atlas: pd.DataFrame, ms2_data: pd.DataFrame) -> pd.DataFrame:
+    """Enrich collected MS2 data with InChi Keys and MSMS refs information.
+    
+    This function merges the MSMS refs with the MS2 data collected from the samples for scoring.
+    Additionally, spectral data are converted to MatchMS Spectrum objects.
+    """
+
+    msms_refs = load_msms_refs_file(msms_refs_path, polarity)
+
+    ms2_data_enriched = pd.merge(ms2_data, aligned_template_atlas[['label', 'inchi_key']], on='label')
+    ms2_data_enriched = pd.merge(ms2_data, msms_refs[['id', 'inchi_key', 'spectrum']], on='inchi_key')
+
+    ms2_data_enriched['mms_spectrum_x'] = ms2_data_enriched.apply(lambda x: mms.Spectrum(x.spectrum_x[0], x.spectrum_x[1], metadata={'precursor_mz':x.precursor_mz}), axis=1)
+    ms2_data_enriched['mms_spectrum_y'] = ms2_data_enriched.apply(lambda x: mms.Spectrum(x.spectrum_y[0], x.spectrum_y[1], metadata={'precursor_mz':x.precursor_mz}), axis=1)
+
+    return ms2_data_enriched
+    
