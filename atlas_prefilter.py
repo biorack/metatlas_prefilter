@@ -3,49 +3,16 @@ import numpy as np
 import glob
 import os
 from typing import TypeAlias
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 import matchms as mms
 from matchms.similarity import CosineHungarian
 
-from metatlas.metatlas.io import feature_tools as ft
+from metatlas.io import feature_tools as ft
 from feature_tools_addition import calculate_ms2_summary
 
 # Typing:
 MS2Spectrum: TypeAlias = np.ndarray[np.ndarray, np.ndarray]
-
-
-## Set atlas pre-filter parameters. This will eventually be derived from the SLURM input and config file paramters
-## In a future version, both the template C18 atlas and the RT adjustment atlases need to be retrieved from the MySQL database on NERSC
-
-raw_data_dir = '/global/cfs/cdirs/metatlas/raw_data/jgi'
-experiment = '20231103_JGI_MW_507961_Char_final-dil_EXP120B_C18_USDAY81385'
-
-msms_refs_path = '/global/cfs/cdirs/metatlas/projects/spectral_libraries/20240222_labeled-addition_msms_refs.tab'
-c18_base_atlas_dir = './metatlas-data/C18/'
-
-# either 'positive' or 'negative'
-polarity = 'positive'
-
-# filtering hit generation
-ppm_tolerance = 5
-extra_time = 0.5
-
-# filtering hits
-rt_window = 0.5
-peak_height = 5e5
-num_points = 4.0
-
-msms_filter = True
-msms_score = 0.65
-msms_matches = 4
-frag_tolerance = 0.02
-
-# use regression for rt alignment, otherwise use median offset
-rt_regression = False
-
-# rt alignment model degree if using regression
-model_degree = 1
 
 
 def order_ms2_spectrum(spectrum: MS2Spectrum) -> MS2Spectrum:
@@ -67,7 +34,7 @@ def extract_file_polarity(file_path: str) -> str:
     return os.path.basename(file_path).split('_')[9]
 
 
-def subset_file_paths(all_files: list, polarity: str) -> tuple[list[str, ...], list[str, ...]]:
+def subset_file_paths(raw_data_dir: str, experiment:str, polarity: str) -> tuple[list[str, ...], list[str, ...]]:
     """Return lists of QC file paths and sample file paths filtered by polarity.
 
     Filter polarity is used in this case to retrieve both fast polarity switching (FPS) files and files matching the defined polarity
@@ -88,11 +55,11 @@ def subset_file_paths(all_files: list, polarity: str) -> tuple[list[str, ...], l
     return (sample_files, qc_files)
 
 
-def get_rt_adjustment_ms1_data(rt_adjustment_atlas: pd.DataFrame, qc_files: list[str, ...], ppm_tolerance: int,
+def get_rt_alignment_ms1_data(rt_alignment_atlas: pd.DataFrame, qc_files: list[str, ...], ppm_tolerance: int,
                                extra_time: float, polarity: str) -> pd.DataFrame:
     """Collect all MS1 feature data for each entry in the retention time adjustment atlas."""
 
-    experiment_input = ft.setup_file_slicing_parameters(rt_adjustment_atlas, qc_files, base_dir=os.getcwd(), ppm_tolerance=ppm_tolerance, extra_time=extra_time, polarity=polarity)
+    experiment_input = ft.setup_file_slicing_parameters(rt_alignment_atlas, qc_files, base_dir=os.getcwd(), ppm_tolerance=ppm_tolerance, extra_time=extra_time, polarity=polarity)
 
     ms1_data = []
     for file_input in experiment_input:
@@ -105,11 +72,11 @@ def get_rt_adjustment_ms1_data(rt_adjustment_atlas: pd.DataFrame, qc_files: list
     return pd.concat(ms1_data)
 
 
-def align_rt_adjustment_peaks(ms1_data: pd.DataFrame, rt_adjustment_atlas: pd.DataFrame) -> tuple[list[float, ...], list[float, ...]]:
+def align_rt_adjustment_peaks(ms1_data: pd.DataFrame, rt_alignment_atlas: pd.DataFrame) -> tuple[list[float, ...], list[float, ...]]:
     """align median experimental retention time peaks with rt adjustment atlas peaks."""
     
     median_experimental_rt_peaks = ms1_data[ms1_data['peak_height'] >= 1e4].groupby('label')['rt_peak'].median()
-    rt_peaks_merged = pd.merge(rt_adjustment_atlas[['label', 'rt_peak']], median_experimental_rt_peaks, on='label')
+    rt_peaks_merged = pd.merge(rt_alignment_atlas[['label', 'rt_peak']], median_experimental_rt_peaks, on='label')
 
     original_rt_peaks = rt_peaks_merged['rt_peak_x'].tolist()
     experimental_rt_peaks = rt_peaks_merged['rt_peak_y'].tolist()
@@ -118,7 +85,7 @@ def align_rt_adjustment_peaks(ms1_data: pd.DataFrame, rt_adjustment_atlas: pd.Da
 
 
 def adjust_template_atlas_rt_peaks(template_atlas: pd.DataFrame, original_rt_peaks: list[float, ...], experimental_rt_peaks:list[float, ...], 
-                     rt_regression: bool, model_degree: int) -> pd.DataFrame:
+                     rt_regression: bool, model_degree: int, rt_window: float) -> pd.DataFrame:
     """Build and use model to adjust template atlas retention time peaks to match experimental retention time space."""
 
     aligned_template_atlas = template_atlas.copy()
@@ -128,7 +95,7 @@ def adjust_template_atlas_rt_peaks(template_atlas: pd.DataFrame, original_rt_pea
         aligned_template_atlas['rt_peak'] = aligned_template_atlas['rt_peak'].apply(lambda x: np.polyval(rt_alignment_model, x))
     
     else:
-        median_offset = (original_rt_peaks - experimental_rt_peaks).median()
+        median_offset = np.median(np.array(original_rt_peaks) - np.array(experimental_rt_peaks))
         aligned_template_atlas['rt_peak'] = aligned_template_atlas['rt_peak'] + median_offset
 
     aligned_template_atlas['rt_min'] = aligned_template_atlas['rt_peak'] - rt_window
@@ -148,7 +115,7 @@ def get_experimental_ms_data(aligned_template_atlas: pd.DataFrame, sample_files:
     ms2_data = []
 
     # Note: disable tqdm in papermill for future version
-    for file_input in tqdm(experiment_input):
+    for file_input in tqdm(experiment_input, unit="file"):
         
         data = ft.get_data(file_input, save_file=False, return_data=True)
         
@@ -167,7 +134,7 @@ def get_experimental_ms_data(aligned_template_atlas: pd.DataFrame, sample_files:
     return (ms1_data, ms2_data)
 
 
-#note, replace with new load function from metatlas once msms hits refactor is in place
+#Note, replace with new load function from metatlas once msms hits refactor is in place
 def load_msms_refs_file(msms_refs_path: str, polarity: str) -> pd.DataFrame:
     """Load and filter MSMS refs file.
     
@@ -185,9 +152,22 @@ def load_msms_refs_file(msms_refs_path: str, polarity: str) -> pd.DataFrame:
     msms_refs_filtered = msms_refs_df[(msms_refs_df['database'] == 'metatlas') & (msms_refs_df['polarity'] == polarity)].copy()
     
     msms_refs_filtered['spectrum'] = msms_refs_filtered['spectrum'].apply(lambda x: np.asarray(eval(x)))
-    msms_refs_filtered['spectrum'] = msms_refs_filtered.apply(order_ms2_spectrum, axis=1)
+    msms_refs_filtered['spectrum'] = msms_refs_filtered['spectrum'].apply(order_ms2_spectrum)
 
     return msms_refs_filtered
+
+
+#Note: This will need to come from the Metatlas DB in the final version.
+def load_atlas_files(template_atlas_path: str | os.PathLike, rt_alignment_atlas_path: str | os.PathLike) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load template and retention time alignment atlese from tsv files.
+    
+    This function will need to be evetually replaced with a database retreival function.
+    """
+    
+    template_atlas = pd.read_csv(template_atlas_path, sep='\t')
+    rt_alignment_atlas = pd.read_csv(rt_alignment_atlas_path, sep='\t')
+    
+    return (template_atlas, rt_alignment_atlas)
 
 
 def calculate_ms2_scores(ms2_data_enriched: pd.DataFrame, frag_tolerance: float) -> list[float, ...]:
@@ -202,7 +182,7 @@ def calculate_ms2_scores(ms2_data_enriched: pd.DataFrame, frag_tolerance: float)
     return scores
 
 
-def enrich_ms2_data(msms_refs_path: str, polarity: str, 
+def enrich_ms2_data(msms_refs_path: str, polarity: str, frag_tolerance: float,
                     aligned_template_atlas: pd.DataFrame, ms2_data: pd.DataFrame) -> pd.DataFrame:
     """Enrich collected MS2 data with InChi Keys and MSMS refs information.
     
@@ -213,10 +193,85 @@ def enrich_ms2_data(msms_refs_path: str, polarity: str,
     msms_refs = load_msms_refs_file(msms_refs_path, polarity)
 
     ms2_data_enriched = pd.merge(ms2_data, aligned_template_atlas[['label', 'inchi_key']], on='label')
-    ms2_data_enriched = pd.merge(ms2_data, msms_refs[['id', 'inchi_key', 'spectrum']], on='inchi_key')
+    ms2_data_enriched = pd.merge(ms2_data_enriched, msms_refs[['id', 'inchi_key', 'spectrum']], on='inchi_key')
 
     ms2_data_enriched['mms_spectrum_x'] = ms2_data_enriched.apply(lambda x: mms.Spectrum(x.spectrum_x[0], x.spectrum_x[1], metadata={'precursor_mz':x.precursor_mz}), axis=1)
     ms2_data_enriched['mms_spectrum_y'] = ms2_data_enriched.apply(lambda x: mms.Spectrum(x.spectrum_y[0], x.spectrum_y[1], metadata={'precursor_mz':x.precursor_mz}), axis=1)
+    
+    ms2_data_enriched['mms_out'] = calculate_ms2_scores(ms2_data_enriched, frag_tolerance)
+    
+    ms2_data_enriched['score'] = ms2_data_enriched['mms_out'].apply(lambda x: x['score'])
+    ms2_data_enriched['matches'] = ms2_data_enriched['mms_out'].apply(lambda x: x['matches'])
 
     return ms2_data_enriched
+
+
+def filter_atlas_labels(ms1_data: pd.DataFrame, ms2_data_enriched: pd.DataFrame, 
+                       peak_height: float, num_points: int, msms_filter: bool, msms_score: float, msms_matches: int) -> set[str, ...]:
+    """Filter atlas labels to include only those that pass the MS1 and MS2 thresholds."""
+    
+    ms1_data_filtered = ms1_data[(ms1_data['peak_height'] >= peak_height) & (ms1_data['num_datapoints'] >= num_points)]
+    ms1_reduced_labels = set(ms1_data_filtered.label.tolist())
+    
+    if msms_filter:
+        ms2_data_filtered = ms2_data_enriched[(ms2_data_enriched['score'] >= msms_score) & (ms2_data_enriched['matches'])]
+        ms2_reduced_labels = set(ms2_data_filtered.label.tolist())
+    else:
+        ms2_reduced_labels = ms1_reduced_labels
+        
+    reduced_labels = ms1_reduced_labels.intersection(ms2_reduced_labels)
+    
+    return reduced_labels
+
+
+# Note: this will need to be replaced with a function to add atlas to the database rather than save as csv
+def save_reduced_atlas(aligned_template_atlas: pd.DataFrame, reduced_labels: set[str, ...], experiment: str, polarity: str) -> None:
+    """Save retention time aligned and filtered template atlas.
+    
+    In the future, this will be replace with adding the new atlas to the metatlas database
+    """
+    
+    aligned_template_atlas = aligned_template_atlas[aligned_template_atlas['label'].isin(reduced_labels)]
+    
+    atlas_cols = ['label', 'adduct', 'polarity', 'mz', 'rt_peak', 'rt_min', 'rt_max', 'inchi_key']
+
+    if not os.path.exists(experiment):
+        os.mkdir(experiment)
+
+    aligned_template_atlas[atlas_cols].to_csv(os.path.join(experiment, '{}_reduced_atlas.csv'.format(polarity)), index=False)
+    
+def generate_outputs(raw_data_dir: str,
+                     experiment: str,
+                     msms_refs_path: str | os.PathLike,
+                     template_atlas_path: str | os.PathLike,
+                     rt_alignment_atlas_path: str | os.PathLike,
+                     polarity: str,
+                     ppm_tolerance: int,
+                     extra_time: float,
+                     rt_window: float,
+                     peak_height: float,
+                     num_points: int,
+                     msms_filter: bool,
+                     msms_score: float,
+                     msms_matches: int,
+                     frag_tolerance: float,
+                     rt_regression: bool,
+                     model_degree: int) -> None:
+    """Generate reduced retention time aligned reduced template atlas."""
+    
+    
+    template_atlas, rt_alignment_atlas = load_atlas_files(template_atlas_path, rt_alignment_atlas_path)
+    sample_files, qc_files = subset_file_paths(raw_data_dir, experiment, polarity)
+    
+    rt_alignment_ms1_data = get_rt_alignment_ms1_data(rt_alignment_atlas, qc_files, ppm_tolerance, extra_time, polarity)
+    original_rt_peaks, experimental_rt_peaks = align_rt_adjustment_peaks(rt_alignment_ms1_data, rt_alignment_atlas)
+    
+    aligned_template_atlas = adjust_template_atlas_rt_peaks(template_atlas, original_rt_peaks, experimental_rt_peaks, rt_regression, model_degree, rt_window)
+    
+    ms1_data, ms2_data = get_experimental_ms_data(aligned_template_atlas, sample_files, ppm_tolerance, extra_time, polarity)
+    ms2_data_enriched = enrich_ms2_data(msms_refs_path, polarity, frag_tolerance, aligned_template_atlas, ms2_data)
+    
+    reduced_labels = filter_atlas_labels(ms1_data, ms2_data_enriched, peak_height, num_points, msms_filter, msms_score, msms_matches)
+    
+    save_reduced_atlas(aligned_template_atlas, reduced_labels, experiment, polarity)
     
