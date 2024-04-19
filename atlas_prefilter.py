@@ -214,7 +214,7 @@ def filter_atlas_labels(ms1_data: pd.DataFrame, ms2_data_enriched: pd.DataFrame,
     ms1_reduced_labels = set(ms1_data_filtered.label.tolist())
     
     if msms_filter:
-        ms2_data_filtered = ms2_data_enriched[(ms2_data_enriched['score'] >= msms_score) & (ms2_data_enriched['matches'])]
+        ms2_data_filtered = ms2_data_enriched[(ms2_data_enriched['score'] >= msms_score) & (ms2_data_enriched['matches'] >= msms_matches)]
         ms2_reduced_labels = set(ms2_data_filtered.label.tolist())
     else:
         ms2_reduced_labels = ms1_reduced_labels
